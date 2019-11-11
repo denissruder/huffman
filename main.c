@@ -5,5 +5,5 @@ int main(const int argc, const char *argv[]) {
         compress(argv[1], argv[2]);
     }
 
-    return 0;
+    return 0; 
 }
