@@ -56,7 +56,7 @@ static int compare(const void *p1, const void *p2);
 static const char *get_filename_ext(const char *filename);
 static int ilog10c(unsigned x);
 static void unix_error(char *msg);
-static char* concat(const char *s1, const char *s2);
+static void strip_ext(char *fname);
 
 /* Public functions*/
 void compress(const char *input, const char *output) {
@@ -115,14 +115,9 @@ void decompress(const char *input) {
         occurence_table[i]->freq = atoi(freq_string);
     }
 
-    for(int i = 0; i < size; i++) {
-        printf("%c %d \n", occurence_table[i]->ch, occurence_table[i]->freq);
-    }
-
     /* Read tail */
     fread(&ch, 1, 1, file_ptr);
     tail = *ch - '0';
-    printf("%d\n", tail);
 
     /* Read Input file size */
     fread(&ch, 1, 1, file_ptr);
@@ -130,56 +125,93 @@ void decompress(const char *input) {
     unsigned char fsize_buf[fsize];
     fread(&fsize_buf, 1, fsize, file_ptr);
     file_size = atoi(fsize_buf);
-    printf("%ld\n", file_size);
 
     /* Read Input file extension */
     fread(&ch, 1, 1, file_ptr);
     unsigned ext_size = *ch - '0';
-    printf("%d\n", ext_size);
     unsigned char ext[ext_size + 1];
     fread(&ext, 1, ext_size, file_ptr);
     ext[ext_size] = '\0';
-    printf("%s\n", ext);
 
     qsort(occurence_table, size, sizeof(struct SYM *), compare);
     struct SYM **generated_table = build_tree(occurence_table, size);
     generate_codes(generated_table[0]);
+                                    
+    FILE *temp_file_ptr;
+    FILE *output_file_ptr;
+    
+    // READ from left to right and concatenate to string
+    // char *input_no_ext = input;
+    // strip_ext(input_no_ext);
+    // int input_no_ext_length = strlen(input_no_ext);
+    // char output[input_no_ext_length + ext_size + 2];
 
-    for(int i = 0; i < size; i++) {
-        if (generated_table[i]->ch != '\0') {
-            printf("[%d]: freq: %d %c - code %s \n", i, generated_table[i]->freq, generated_table[i]->ch, generated_table[i]->code);
+    // for(int i = 0; i < input_no_ext_length; i++) {
+    //     output[i] = input_no_ext[i];
+    // }
+    // output[input_no_ext_length] = '.';
+    // for(int i = input_no_ext_length + 1; i < (input_no_ext_length + ext_size + 1) ; i++) {
+    //     output[i] = ext[i-(input_no_ext_length + 1)];
+    // }
+    // output[input_no_ext_length + ext_size + 1] = '\0';
+    // printf("%s\n", output);
+
+    if ((temp_file_ptr = fopen("temp.txt", "wb+")) == NULL) {    
+        unix_error("Error opening file");
+    }
+
+    union CODE code;
+    while(fread(&ch, 1, 1, file_ptr) != 0) {
+        code.ch = *ch;
+        fprintf(temp_file_ptr, "%d", code.byte.b1);     
+        fprintf(temp_file_ptr, "%d", code.byte.b2);     
+        fprintf(temp_file_ptr, "%d", code.byte.b3);     
+        fprintf(temp_file_ptr, "%d", code.byte.b4);     
+        fprintf(temp_file_ptr, "%d", code.byte.b5);     
+        fprintf(temp_file_ptr, "%d", code.byte.b6);     
+        fprintf(temp_file_ptr, "%d", code.byte.b7);     
+        fprintf(temp_file_ptr, "%d", code.byte.b8);     
+    }
+    
+    int temp_file_size = ftell(temp_file_ptr);
+    rewind(temp_file_ptr);
+
+    int temp_file_size_no_tail = temp_file_size - tail;
+
+    if ((output_file_ptr = fopen("decoded.txt", "wb")) == NULL) {    
+        unix_error("Error opening file");
+    }
+
+    unsigned char c;
+    char str[256];
+    int str_pointer = 0;
+    
+    for(int i = 0; i < temp_file_size_no_tail; i++) {
+        c = getc(temp_file_ptr);
+        str[str_pointer++] = c;
+        str[str_pointer] = '\0';
+        for(int j = 0; j < size; j++) {
+            if(generated_table[j]->ch != '\0') {
+                if(strcmp(generated_table[j]->code, str) == 0) {
+                    fprintf(output_file_ptr, "%c", generated_table[j]->ch); 
+                    str_pointer = 0;
+                    str[0] = '\0';
+                    break;
+                }
+            }
         }
     }
-                                                 
-    FILE *output_file_ptr; 
-    
 
-    // READ from left to right and concatenate to string
+    int output_file_size = ftell(output_file_ptr);
 
-    // char output[ext_size + 13];
-    // strcat(output, "decompressed.");
-    // char* output_file_name = strcat(output, ext);
-    // printf("Output file name %s\n", output_file_name);
+    fclose(temp_file_ptr);
+    fclose(output_file_ptr);
+    fclose(file_ptr);
 
-    // if ((output_file_ptr = fopen(output, "wb")) == NULL) {    
-    //     unix_error("Error opening file");
-    // }
-
-    // char str[256] = {};
-    // while(fread(&ch, 1, 1, file_ptr) != 0) {
-    //     char c = *ch;
-    //     strncat(str, &c, 1);
-    //     for(int i = 0; i < size; i++) {
-    //         if(strcmp(generated_table[i]->code, str) == 0) {
-    //             fprintf(output_file_ptr, "%s", str); 
-    //             char str[] = "";
-    //             break;
-    //         }
-    //     }
-    // }
-
-    // fclose(file_ptr);
-    // free(output_file_name);
+    /* Check file sizes */
+    if(output_file_size != file_size) {
+        unix_error("Decoded file size is different.");
+    }
 }
 
 /* Analyzer */
@@ -231,10 +263,6 @@ static struct SYM ** analyze(const char *input) {
     /* Sort in descending order */
     qsort(occurence_table, size, sizeof(struct SYM *), compare);
 
-    for(int i = 0; i < size; i++) {
-        printf("%c %d %s\n", occurence_table[i]->ch, occurence_table[i]->freq, occurence_table[i]->code);
-    }
-
     return occurence_table;
 }
 
@@ -242,12 +270,6 @@ static struct SYM ** analyze(const char *input) {
 static struct SYM ** generate(struct SYM **occurence_table) {
     struct SYM **generated_table = build_tree(occurence_table, size);
     generate_codes(generated_table[0]);
-
-    for(int i = 0; i < size; i++) {
-        if (generated_table[i]->ch != '\0') {
-            printf("[%d]: freq: %d %c - code %s \n", i, generated_table[i]->freq, generated_table[i]->ch, generated_table[i]->code);
-        }
-    }
 
     return generated_table;
 }
@@ -264,12 +286,6 @@ static void code(const char *input, const char *output, struct SYM **generated_t
             codes[generated_table[i]->ch] = generated_table[i]->code;
         }
     }
-
-    // for(int i = 0; i < 256; i++) {
-    //     if(codes[i] != NULL) {
-    //         printf("codes[%d]: %s\n", i, codes[i]);
-    //     }
-    // }
 
     /* Check for Errors while opening a file */
     if ((input_file_ptr = fopen(input, "rb")) == NULL 
@@ -306,7 +322,6 @@ static void pack(const char *input, const char *temp, const char *output, struct
     }
 
     fprintf(output_file_ptr, "%s", signature);                                      // (0s) + Signature
-    printf("signature %s\n", signature);
 
     if (occurence_table_size < 10) {
         fprintf(output_file_ptr, "%s", "00"); 
@@ -315,18 +330,12 @@ static void pack(const char *input, const char *temp, const char *output, struct
     }
 
     fprintf(output_file_ptr, "%d", occurence_table_size);                           // Number of unique symbols
-    printf("number of unique symbols %d\n", occurence_table_size);
 
     for(int i = 0; i < size; i++) {
         if (generated_table[i]->ch != '\0') {
             fprintf(output_file_ptr, "%c", generated_table[i]->ch);                 // Symbol code
-            printf("symbol code %c\n", generated_table[i]->ch);
-
             fprintf(output_file_ptr, "%d", ilog10c(generated_table[i]->freq)+1);    // Frequency integer size in bytes
-            printf("frequency size %d\n", ilog10c(generated_table[i]->freq)+1);
-            
             fprintf(output_file_ptr, "%d", generated_table[i]->freq);               // Frequency
-            printf("frequency: %d\n", generated_table[i]->freq);
         }
     }
 
@@ -339,17 +348,11 @@ static void pack(const char *input, const char *temp, const char *output, struct
 
     int tail_size = 8 - temp_file_size % 8;
     fprintf(output_file_ptr, "%d", tail_size);                         // Tail size
-    printf("temp file size %d\n", temp_file_size);
-    printf("tail %d\n", tail_size);
     fprintf(output_file_ptr, "%d", ilog10c(input_file_size) +1);       // Input file integer size
-    printf("input file size %d\n", ilog10c(input_file_size) +1);
     fprintf(output_file_ptr, "%d", input_file_size);                   // Input file size in bytes
-    printf("input file size %d\n", input_file_size);
     const char *extension = get_filename_ext(input);
-    printf("ext size %ld\n", strlen(extension)); //
     fprintf(output_file_ptr, "%ld", strlen(extension)); 
     fprintf(output_file_ptr, "%s", extension);                         // Input file extension
-    printf("input file size %s\n", extension);
 
     unsigned char ch;
     while(fread(&buf, 1, 8, temp_file_ptr) != 0) {
@@ -452,12 +455,16 @@ static int ilog10c(unsigned x) {
             return ((int)(x - 1) >> 31);
 }
 
-static char* concat(const char *s1, const char *s2) {
-    char *result = malloc(strlen(s1) + strlen(s2) + 1); // +1 for the null-terminator
-    // in real code you would check for errors in malloc here
-    strcpy(result, s1);
-    strcat(result, s2);
-    return result;
+static void strip_ext(char *fname) {
+    char *end = fname + strlen(fname);
+
+    while(end > fname && *end != '.') {
+        --end;
+    }
+
+    if (end > fname) {
+        *end = '\0';
+    }
 }
 
 static void unix_error(char *msg) {
