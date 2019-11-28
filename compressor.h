@@ -1,2 +1,2 @@
 extern void compress(const char *input, const char *output);
-extern void decompress(const char *input);
+extern void decompress(const char *input, const char *output);

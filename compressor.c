@@ -9,8 +9,9 @@
 
 /* Symbol representation */
 struct SYM {
-    unsigned char ch;      // ASCII-code
+    unsigned char ch;      // symbol-code
     int freq;              // Symbol frequency
+    int gen;               // Generated node
     char code[256];        // Array for a new code
     struct SYM *left;      // left child in a tree
     struct SYM *right;     // right child in a tree
@@ -31,9 +32,10 @@ union CODE {
     } byte;
 };
 
-/* Global variable to keep track of size of the array of pointers allocated by malloc */
-int size;
-int occurence_table_size;
+#define MAX_T_LEN 512
+#define MAX_CH_LEN 256
+
+int T_LEN = 0;
 
 /* Analyzer */
 static struct SYM ** analyze(const char *input);
@@ -47,73 +49,105 @@ static void code(const char *input, const char *output, struct SYM **generated_t
 /* Packer */    
 static void pack(const char *input, const char *temp, const char *output, struct SYM **generated_table);  
    
-
 /* Utility functions */
 static struct SYM ** build_tree(struct SYM *occurence_table[], int N);
 static unsigned char pack_byte(unsigned char buf[]);     
 static void generate_codes(struct SYM *root);
 static int compare(const void *p1, const void *p2);
-static const char *get_filename_ext(const char *filename);
 static int ilog10c(unsigned x);
 static void unix_error(char *msg);
-static void strip_ext(char *fname);
 
 /* Public functions*/
 void compress(const char *input, const char *output) {
-    struct SYM **occurence_table = analyze(input);
-    struct SYM **generated_table = generate(occurence_table);
+    struct SYM **symbol_table = analyze(input);
+
+    struct SYM **generated_table = generate(symbol_table);
+
+    // printf("\n");
+    // for(int i = 0; i < MAX_T_LEN; i++){
+    //     printf("[%c:%d:%s] ",generated_table[i]->ch, generated_table[i]->freq, generated_table[i]->code);
+    // }
+
     code(input, "temp.txt", generated_table);
     pack(input, "temp.txt", output, generated_table);
 }
 
-void decompress(const char *input) {
-    unsigned char signature[3];     // Signature
-    unsigned char size_buf[3]; // Number of unique symbols buf
+/* Decompressor */
+void decompress(const char *input, const char *output) {
     unsigned char ch[1];
+    unsigned char symbol;
     unsigned long ch_size = 0;
     unsigned char curr_ch;
     unsigned tail = 0;
     unsigned long file_size = 0;
-    unsigned char *extension;
     FILE *file_ptr;
 
     /* Check for Errors while opening a file */
-    if ((file_ptr = fopen(input, "r")) == NULL) {    
-        unix_error("Error opening file");
+    if ((file_ptr = fopen(input, "rb")) == NULL) {    
+        unix_error("Error opening file in Decompressor");
     }
 
     /* Read Signature and check it */
+    unsigned char signature[3];
     fread(&signature, 1, 2, file_ptr);
     signature[2] = '\0';
 
     if (strcmp(signature, "DR") != 0) {
-        unix_error("Wrong signature, this file wasn't compressed by this compressor.");
+        unix_error("Wrong signature error in Decompressor");
     }
 
     /* Read Number of unique symbols */
+    unsigned char size_buf[3];
     fread(&size_buf, 1, 3, file_ptr);
-    size = atoi(size_buf);
-    
-    /* Read Symbol code and Frequency */
-    struct SYM **occurence_table = (struct SYM **) malloc(size * sizeof(struct SYM *));
-    for(int i = 0; i < size; i++) {
-        /* Read Symbol */
-        fread(&ch, 1, 1, file_ptr);
-        occurence_table[i] = (struct SYM *) malloc(sizeof(struct SYM));
-        occurence_table[i]->ch = *ch;;
-        *occurence_table[i]->code = '\0';
-        occurence_table[i]->left = NULL;
-        occurence_table[i]->right = NULL;
+    T_LEN = atoi(size_buf);
 
-        /* Read frequency size in bytes */
+    /* Initialize symbol table */
+    struct SYM **symbol_table = (struct SYM **) malloc(MAX_T_LEN * sizeof(struct SYM *));
+
+    /* Check for Errors after allocating */
+    if (symbol_table == NULL) {
+        unix_error("Malloc failed in **symbol_table in Decompressor");
+    }
+
+    for(int i = 0; i < MAX_T_LEN; i++) {
+        symbol_table[i] = (struct SYM *) malloc(sizeof(struct SYM));
+        
+        /* Check for Errors after allocating */
+        if (symbol_table[i] == NULL) {
+            unix_error("Malloc failed initializing symbol_table[i] in Decompressor");
+        }
+
+        if (i >= MAX_CH_LEN) {
+            symbol_table[i]->ch = '\0';
+        } else {
+            symbol_table[i]->ch = i;
+        }
+
+        symbol_table[i]->freq = 0;
+        symbol_table[i]->gen = 1;
+        *symbol_table[i]->code = '\0';
+        symbol_table[i]->left = NULL;
+        symbol_table[i]->right = NULL;
+    }
+
+    /* Read Symbol code and Frequency */
+    for(int i = 0; i < T_LEN; i++) {
+        /* Read Symbol */
+        symbol = getc(file_ptr);
+
+        /* Read frequency size in chars */
         fread(&ch, 1, 1, file_ptr);
         ch_size = atoi(ch);
 
         /* Read frequency */        
         unsigned char freq_string[ch_size];
         fread(&freq_string, 1, ch_size, file_ptr);
-        occurence_table[i]->freq = atoi(freq_string);
+        symbol_table[symbol]->freq = atoi(freq_string);
     }
+
+    // for(int i = 0; i < MAX_T_LEN; i++){
+    //     printf("[%c:%d] ",symbol_table[i]->ch, symbol_table[i]->freq);
+    // }
 
     /* Read tail */
     fread(&ch, 1, 1, file_ptr);
@@ -125,37 +159,20 @@ void decompress(const char *input) {
     unsigned char fsize_buf[fsize];
     fread(&fsize_buf, 1, fsize, file_ptr);
     file_size = atoi(fsize_buf);
+    
+    /* Sort table and generate codes */
+    qsort(symbol_table, MAX_T_LEN, sizeof(struct SYM *), compare);
 
-    /* Read Input file extension */
-    fread(&ch, 1, 1, file_ptr);
-    unsigned ext_size = *ch - '0';
-    unsigned char ext[ext_size + 1];
-    fread(&ext, 1, ext_size, file_ptr);
-    ext[ext_size] = '\0';
+    // for(int i = 0; i < MAX_T_LEN; i++){
+    //     printf("[%c:%d] ",symbol_table[i]->ch, symbol_table[i]->freq);
+    // }
 
-    qsort(occurence_table, size, sizeof(struct SYM *), compare);
-    struct SYM **generated_table = build_tree(occurence_table, size);
+    struct SYM **generated_table = build_tree(symbol_table, T_LEN);
     generate_codes(generated_table[0]);
-                                    
+                            
     FILE *temp_file_ptr;
     FILE *output_file_ptr;
     
-    // READ from left to right and concatenate to string
-    // char *input_no_ext = input;
-    // strip_ext(input_no_ext);
-    // int input_no_ext_length = strlen(input_no_ext);
-    // char output[input_no_ext_length + ext_size + 2];
-
-    // for(int i = 0; i < input_no_ext_length; i++) {
-    //     output[i] = input_no_ext[i];
-    // }
-    // output[input_no_ext_length] = '.';
-    // for(int i = input_no_ext_length + 1; i < (input_no_ext_length + ext_size + 1) ; i++) {
-    //     output[i] = ext[i-(input_no_ext_length + 1)];
-    // }
-    // output[input_no_ext_length + ext_size + 1] = '\0';
-    // printf("%s\n", output);
-
     if ((temp_file_ptr = fopen("temp.txt", "wb+")) == NULL) {    
         unix_error("Error opening file");
     }
@@ -173,15 +190,16 @@ void decompress(const char *input) {
         fprintf(temp_file_ptr, "%d", code.byte.b8);     
     }
     
+
     int temp_file_size = ftell(temp_file_ptr);
     rewind(temp_file_ptr);
-
     int temp_file_size_no_tail = temp_file_size - tail;
 
-    if ((output_file_ptr = fopen("decoded.txt", "wb")) == NULL) {    
+    if ((output_file_ptr = fopen(output, "wb")) == NULL) {    
         unix_error("Error opening file");
     }
 
+    /* Problema sdes */
     unsigned char c;
     char str[256];
     int str_pointer = 0;
@@ -190,8 +208,8 @@ void decompress(const char *input) {
         c = getc(temp_file_ptr);
         str[str_pointer++] = c;
         str[str_pointer] = '\0';
-        for(int j = 0; j < size; j++) {
-            if(generated_table[j]->ch != '\0') {
+        for(int j = 0; j < MAX_T_LEN; j++) {
+            if(generated_table[j]->gen != 0) {
                 if(strcmp(generated_table[j]->code, str) == 0) {
                     fprintf(output_file_ptr, "%c", generated_table[j]->ch); 
                     str_pointer = 0;
@@ -204,10 +222,14 @@ void decompress(const char *input) {
 
     int output_file_size = ftell(output_file_ptr);
 
+    fclose(file_ptr);
     fclose(temp_file_ptr);
     fclose(output_file_ptr);
-    fclose(file_ptr);
 
+    for(int i = 0; i < MAX_T_LEN; i++) {
+        free(generated_table[i]);
+    }
+    
     /* Check file sizes */
     if(output_file_size != file_size) {
         unix_error("Decoded file size is different.");
@@ -216,59 +238,66 @@ void decompress(const char *input) {
 
 /* Analyzer */
 static struct SYM ** analyze(const char *input) {
-    struct SYM **symbol_table = (struct SYM **) malloc(256 * sizeof(struct SYM *));
-    size = 0;
-    occurence_table_size = 0;                                                    
+    struct SYM **symbol_table = (struct SYM **) malloc(MAX_T_LEN * sizeof(struct SYM *));
     unsigned char ch[1];                                                                
     FILE *file_ptr; 
 
+    /* Check for Errors after allocating */
+    if (symbol_table == NULL) {
+        unix_error("Malloc failed in **symbol_table Analyzer");
+    }
+
+    /* Initialize symbol entry */
+    for(int i = 0; i < MAX_T_LEN; i++) {
+        symbol_table[i] = (struct SYM *) malloc(sizeof(struct SYM));
+        
+        /* Check for Errors after allocating */
+        if (symbol_table[i] == NULL) {
+            unix_error("Malloc failed initializing symbol_table[i] in Analyzer");
+        }
+
+        if (i >= MAX_CH_LEN) {
+            symbol_table[i]->ch = '\0';
+        } else {
+            symbol_table[i]->ch = i;
+        }
+
+        symbol_table[i]->freq = 0;
+        symbol_table[i]->gen = 1;
+        *symbol_table[i]->code = '\0';
+        symbol_table[i]->left = NULL;
+        symbol_table[i]->right = NULL;
+    }
+
     /* Check for Errors while opening a file */
-    if ((file_ptr = fopen(input, "r")) == NULL) {    
+    if ((file_ptr = fopen(input, "rb")) == NULL) {    
         unix_error("Error opening file");
     }
  
-     /* Read and calculate frequency of every ASCII symbol in the file */
+    /* Read and calculate frequency of every symbol symbol in the file */
     while(fread(&ch, 1, 1, file_ptr) != 0) {
-        if (symbol_table[*ch] == NULL) {
-            /* Initialize symbol */
-            symbol_table[*ch] = (struct SYM *) malloc(sizeof(struct SYM));
-            symbol_table[*ch]->ch = *ch;
-            symbol_table[*ch]->freq = 1;
-            *symbol_table[*ch]->code = '\0';
-            symbol_table[*ch]->left = NULL;
-            symbol_table[*ch]->right = NULL;
-            size++;
-        } else {
-            /* Calculate frequency */
-            symbol_table[*ch]->freq++;
-        }
+        symbol_table[*ch]->freq++;    
     }
 
     /* Close the file */
     fclose(file_ptr);
 
-    struct SYM **occurence_table = (struct SYM **) malloc(size * sizeof(struct SYM *));
-    occurence_table_size = size;
-
-    /* Fill in occurence table and deallocate memory for empty pointers */
-    for(int i = 0, j = 0; i < 256 && j != size; i++) {
-        if (symbol_table[i] != NULL) {
-            occurence_table[j++] = symbol_table[i];
-        } else {
-            /* Deallocate memory */
-            free(symbol_table[i]);
-        }
-    }
-
     /* Sort in descending order */
-    qsort(occurence_table, size, sizeof(struct SYM *), compare);
+    qsort(symbol_table, MAX_T_LEN, sizeof(struct SYM *), compare);
 
-    return occurence_table;
+    return symbol_table;
 }
 
 /* Code generator */
 static struct SYM ** generate(struct SYM **occurence_table) {
-    struct SYM **generated_table = build_tree(occurence_table, size);
+    for(int i = 0; i < MAX_CH_LEN; i++) {
+        if(occurence_table[i]->freq == 0) {
+            break;
+        }
+        T_LEN++;
+    }
+
+    struct SYM **generated_table = build_tree(occurence_table, T_LEN);
     generate_codes(generated_table[0]);
 
     return generated_table;
@@ -281,8 +310,8 @@ static void code(const char *input, const char *output, struct SYM **generated_t
     FILE *input_file_ptr; 
     FILE *output_file_ptr; 
 
-    for(int i = 0; i < size; i++) {
-        if (generated_table[i]->ch != '\0') {
+    for(int i = 0; i < MAX_T_LEN; i++) {
+        if (generated_table[i]->gen != 0 && generated_table[i]->freq != 0) {
             codes[generated_table[i]->ch] = generated_table[i]->code;
         }
     }
@@ -307,7 +336,7 @@ static void code(const char *input, const char *output, struct SYM **generated_t
 
 /* Packer */
 static void pack(const char *input, const char *temp, const char *output, struct SYM **generated_table) {
-    /* Header fields [Signature, Number of Unique symbols, [Symbol code and frequency pairs], Tail size, [Encoded symbols]*/
+    /* Header fields [Signature, Number of Unique symbols, [{Symbol code, Freq size in chars, Freq},..], Tail size, Input file size in chars, Input file size, [Encoded symbols]] */
     unsigned char *signature = "DR";
     unsigned char buf[8];  
 
@@ -323,18 +352,18 @@ static void pack(const char *input, const char *temp, const char *output, struct
 
     fprintf(output_file_ptr, "%s", signature);                                      // (0s) + Signature
 
-    if (occurence_table_size < 10) {
+    if (T_LEN < 10) {
         fprintf(output_file_ptr, "%s", "00"); 
-    } else if (occurence_table_size >= 10 && occurence_table_size < 100) {
+    } else if (T_LEN >= 10 && T_LEN < 100) {
         fprintf(output_file_ptr, "%s", "0"); 
     }
 
-    fprintf(output_file_ptr, "%d", occurence_table_size);                           // Number of unique symbols
+    fprintf(output_file_ptr, "%d", T_LEN);                                          // Number of unique symbols
 
-    for(int i = 0; i < size; i++) {
-        if (generated_table[i]->ch != '\0') {
+    for(int i = 0; i < MAX_T_LEN; i++) {
+        if (generated_table[i]->gen != 0 && generated_table[i]->freq != 0) {
             fprintf(output_file_ptr, "%c", generated_table[i]->ch);                 // Symbol code
-            fprintf(output_file_ptr, "%d", ilog10c(generated_table[i]->freq)+1);    // Frequency integer size in bytes
+            fprintf(output_file_ptr, "%d", ilog10c(generated_table[i]->freq)+1);    // Frequency size in chars
             fprintf(output_file_ptr, "%d", generated_table[i]->freq);               // Frequency
         }
     }
@@ -350,9 +379,6 @@ static void pack(const char *input, const char *temp, const char *output, struct
     fprintf(output_file_ptr, "%d", tail_size);                         // Tail size
     fprintf(output_file_ptr, "%d", ilog10c(input_file_size) +1);       // Input file integer size
     fprintf(output_file_ptr, "%d", input_file_size);                   // Input file size in bytes
-    const char *extension = get_filename_ext(input);
-    fprintf(output_file_ptr, "%ld", strlen(extension)); 
-    fprintf(output_file_ptr, "%s", extension);                         // Input file extension
 
     unsigned char ch;
     while(fread(&buf, 1, 8, temp_file_ptr) != 0) {
@@ -360,7 +386,8 @@ static void pack(const char *input, const char *temp, const char *output, struct
         fprintf(output_file_ptr, "%c", ch);
     }
 
-    for(int i = 0; i < size; i++) {
+    /* Free allocated memory */
+    for(int i = 0; i < MAX_T_LEN; i++) {
         free(generated_table[i]);
     }
 
@@ -382,18 +409,11 @@ unsigned char pack_byte(unsigned char buf[]){
     code.byte.b8=buf[7]-'0';
     return code.ch;
 }
+
 static int compare(const void *p1, const void *p2) {
     const struct SYM *sym1 = *(const struct SYM **) p1;
     const struct SYM *sym2 = *(const struct SYM **) p2;
     return sym2->freq - sym1->freq;
-}
-
-static const char *get_filename_ext(const char *filename) {
-    const char *dot = strrchr(filename, '.');
-    if (!dot || dot == filename) {
-        return "";
-    }
-    return dot + 1;
 }
 
 static struct SYM ** build_tree(struct SYM **occurence_table, int N) {
@@ -407,13 +427,13 @@ static struct SYM ** build_tree(struct SYM **occurence_table, int N) {
     temp->right=occurence_table[N-2];
     temp->ch = '\0';
     temp->code[0] = 0;
+    temp->gen = 0;
 
     /* Allocate space in the table for temp */
-    occurence_table = (struct SYM **) realloc(occurence_table, ++size * sizeof(struct SYM *));
-    occurence_table[size-1] = temp;
+    occurence_table[MAX_CH_LEN] = temp;
 
     /* Sort in descending order */
-    qsort(occurence_table, size, sizeof(struct SYM *), compare);
+    qsort(occurence_table, MAX_T_LEN, sizeof(struct SYM *), compare);
 
     /* Root element is set, return */
     if (N == 2) {
@@ -453,18 +473,6 @@ static int ilog10c(unsigned x) {
             return 1;
       else
             return ((int)(x - 1) >> 31);
-}
-
-static void strip_ext(char *fname) {
-    char *end = fname + strlen(fname);
-
-    while(end > fname && *end != '.') {
-        --end;
-    }
-
-    if (end > fname) {
-        *end = '\0';
-    }
 }
 
 static void unix_error(char *msg) {
