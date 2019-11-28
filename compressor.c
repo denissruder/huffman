@@ -41,7 +41,7 @@ int T_LEN = 0;
 static struct SYM ** analyze(const char *input);
 
 /* Code Generator */
-static struct SYM ** generate(struct SYM **occurence_table);
+static struct SYM ** generate(struct SYM **symbol_table);
 
 /* Coder */
 static void code(const char *input, const char *output, struct SYM **generated_table);   
@@ -50,7 +50,7 @@ static void code(const char *input, const char *output, struct SYM **generated_t
 static void pack(const char *input, const char *temp, const char *output, struct SYM **generated_table);  
    
 /* Utility functions */
-static struct SYM ** build_tree(struct SYM *occurence_table[], int N);
+static struct SYM ** build_tree(struct SYM *symbol_table[], int N);
 static unsigned char pack_byte(unsigned char buf[]);     
 static void generate_codes(struct SYM *root);
 static int compare(const void *p1, const void *p2);
@@ -63,11 +63,6 @@ void compress(const char *input, const char *output) {
 
     struct SYM **generated_table = generate(symbol_table);
 
-    // printf("\n");
-    // for(int i = 0; i < MAX_T_LEN; i++){
-    //     printf("[%c:%d:%s] ",generated_table[i]->ch, generated_table[i]->freq, generated_table[i]->code);
-    // }
-
     code(input, "temp.txt", generated_table);
     pack(input, "temp.txt", output, generated_table);
 }
@@ -76,7 +71,7 @@ void compress(const char *input, const char *output) {
 void decompress(const char *input, const char *output) {
     unsigned char ch[1];
     unsigned char symbol;
-    unsigned long ch_size = 0;
+    unsigned ch_size = 0;
     unsigned char curr_ch;
     unsigned tail = 0;
     unsigned long file_size = 0;
@@ -100,6 +95,8 @@ void decompress(const char *input, const char *output) {
     unsigned char size_buf[3];
     fread(&size_buf, 1, 3, file_ptr);
     T_LEN = atoi(size_buf);
+
+    printf("T_LEN: %d\n", T_LEN);
 
     /* Initialize symbol table */
     struct SYM **symbol_table = (struct SYM **) malloc(MAX_T_LEN * sizeof(struct SYM *));
@@ -137,17 +134,13 @@ void decompress(const char *input, const char *output) {
 
         /* Read frequency size in chars */
         fread(&ch, 1, 1, file_ptr);
-        ch_size = atoi(ch);
+        ch_size = *ch - '0';
 
         /* Read frequency */        
         unsigned char freq_string[ch_size];
-        fread(&freq_string, 1, ch_size, file_ptr);
+        fread(&freq_string, ch_size, 1, file_ptr);
         symbol_table[symbol]->freq = atoi(freq_string);
     }
-
-    // for(int i = 0; i < MAX_T_LEN; i++){
-    //     printf("[%c:%d] ",symbol_table[i]->ch, symbol_table[i]->freq);
-    // }
 
     /* Read tail */
     fread(&ch, 1, 1, file_ptr);
@@ -163,13 +156,15 @@ void decompress(const char *input, const char *output) {
     /* Sort table and generate codes */
     qsort(symbol_table, MAX_T_LEN, sizeof(struct SYM *), compare);
 
-    // for(int i = 0; i < MAX_T_LEN; i++){
-    //     printf("[%c:%d] ",symbol_table[i]->ch, symbol_table[i]->freq);
-    // }
-
     struct SYM **generated_table = build_tree(symbol_table, T_LEN);
     generate_codes(generated_table[0]);
                             
+    for(int i = 0; i < MAX_T_LEN; i++){
+        if (generated_table[i]->freq != 0 && generated_table[i]->gen != 0) {
+            printf("[%c:%d %s] ",generated_table[i]->ch, generated_table[i]->freq, generated_table[i]->code);
+        }
+    }
+
     FILE *temp_file_ptr;
     FILE *output_file_ptr;
     
@@ -199,7 +194,7 @@ void decompress(const char *input, const char *output) {
         unix_error("Error opening file");
     }
 
-    /* Problema sdes */
+    //Problem is here
     unsigned char c;
     char str[256];
     int str_pointer = 0;
@@ -289,15 +284,15 @@ static struct SYM ** analyze(const char *input) {
 }
 
 /* Code generator */
-static struct SYM ** generate(struct SYM **occurence_table) {
+static struct SYM ** generate(struct SYM **symbol_table) {
     for(int i = 0; i < MAX_CH_LEN; i++) {
-        if(occurence_table[i]->freq == 0) {
+        if(symbol_table[i]->freq == 0) {
             break;
         }
         T_LEN++;
     }
 
-    struct SYM **generated_table = build_tree(occurence_table, T_LEN);
+    struct SYM **generated_table = build_tree(symbol_table, T_LEN);
     generate_codes(generated_table[0]);
 
     return generated_table;
@@ -305,7 +300,7 @@ static struct SYM ** generate(struct SYM **occurence_table) {
 
 /* Coder */
 static void code(const char *input, const char *output, struct SYM **generated_table){
-    char *codes[256] = {0};
+    char *codes[MAX_CH_LEN] = {0};
     unsigned char ch[1];                                                                
     FILE *input_file_ptr; 
     FILE *output_file_ptr; 
@@ -324,10 +319,9 @@ static void code(const char *input, const char *output, struct SYM **generated_t
  
     /* Read input file and append generated code replacing symbol */
     while(fread(&ch, 1, 1, input_file_ptr) != 0) {
-        if (codes[*ch] == NULL) {
-            unix_error("Error inside coder");
+        if (codes[*ch] != NULL) {
+            fprintf(output_file_ptr, "%s", codes[*ch]);
         }
-        fprintf(output_file_ptr, "%s", codes[*ch]);
     }
 
     fclose(input_file_ptr);
@@ -416,31 +410,31 @@ static int compare(const void *p1, const void *p2) {
     return sym2->freq - sym1->freq;
 }
 
-static struct SYM ** build_tree(struct SYM **occurence_table, int N) {
+static struct SYM ** build_tree(struct SYM **symbol_table, int N) {
     struct SYM *temp = (struct SYM*) malloc(sizeof(struct SYM));
-    
+
     /* Sum of frequencies of two last elements */
-    temp->freq = occurence_table[N-2]->freq + occurence_table[N-1]->freq;
+    temp->freq = symbol_table[N-2]->freq + symbol_table[N-1]->freq;
     
     /* Link temp node with two last nodes */
-    temp->left=occurence_table[N-1];
-    temp->right=occurence_table[N-2];
+    temp->left=symbol_table[N-1];
+    temp->right=symbol_table[N-2];
     temp->ch = '\0';
     temp->code[0] = 0;
     temp->gen = 0;
 
-    /* Allocate space in the table for temp */
-    occurence_table[MAX_CH_LEN] = temp;
+    /* Set temp to the last element of symbol table */
+    symbol_table[MAX_T_LEN] = temp;
 
     /* Sort in descending order */
-    qsort(occurence_table, MAX_T_LEN, sizeof(struct SYM *), compare);
+    qsort(symbol_table, MAX_T_LEN, sizeof(struct SYM *), compare);
 
     /* Root element is set, return */
     if (N == 2) {
-        return occurence_table;
+        return symbol_table;
     }
 
-    return build_tree(occurence_table, N-1);
+    return build_tree(symbol_table, N-1);
 }
 
 static void generate_codes(struct SYM *root) {
