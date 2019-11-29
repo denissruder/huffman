@@ -159,11 +159,11 @@ void decompress(const char *input, const char *output) {
     struct SYM **generated_table = build_tree(symbol_table, T_LEN);
     generate_codes(generated_table[0]);
                             
-    for(int i = 0; i < MAX_T_LEN; i++){
-        if (generated_table[i]->freq != 0 && generated_table[i]->gen != 0) {
-            printf("[%c:%d %s] ",generated_table[i]->ch, generated_table[i]->freq, generated_table[i]->code);
-        }
-    }
+    // for(int i = 0; i < MAX_T_LEN; i++){
+    //     if (generated_table[i]->freq != 0 && generated_table[i]->gen != 0) {
+    //         printf("[%c:%d %s] ",generated_table[i]->ch, generated_table[i]->freq, generated_table[i]->code);
+    //     }
+    // }
 
     FILE *temp_file_ptr;
     FILE *output_file_ptr;
@@ -175,6 +175,9 @@ void decompress(const char *input, const char *output) {
     union CODE code;
     while(fread(&ch, 1, 1, file_ptr) != 0) {
         code.ch = *ch;
+
+        //Problem is here
+        printf("%c\n",*ch);
         fprintf(temp_file_ptr, "%d", code.byte.b1);     
         fprintf(temp_file_ptr, "%d", code.byte.b2);     
         fprintf(temp_file_ptr, "%d", code.byte.b3);     
@@ -190,11 +193,12 @@ void decompress(const char *input, const char *output) {
     rewind(temp_file_ptr);
     int temp_file_size_no_tail = temp_file_size - tail;
 
+    printf("output file size %d", temp_file_size_no_tail);
+
     if ((output_file_ptr = fopen(output, "wb")) == NULL) {    
         unix_error("Error opening file");
     }
 
-    //Problem is here
     unsigned char c;
     char str[256];
     int str_pointer = 0;
@@ -204,7 +208,7 @@ void decompress(const char *input, const char *output) {
         str[str_pointer++] = c;
         str[str_pointer] = '\0';
         for(int j = 0; j < MAX_T_LEN; j++) {
-            if(generated_table[j]->gen != 0) {
+            if(generated_table[j]->gen != 0 && generated_table[j]->freq != 0) {
                 if(strcmp(generated_table[j]->code, str) == 0) {
                     fprintf(output_file_ptr, "%c", generated_table[j]->ch); 
                     str_pointer = 0;
@@ -216,6 +220,8 @@ void decompress(const char *input, const char *output) {
     }
 
     int output_file_size = ftell(output_file_ptr);
+    printf("output file size %d", output_file_size);
+    printf("original file size %ld", file_size);
 
     fclose(file_ptr);
     fclose(temp_file_ptr);
@@ -424,7 +430,7 @@ static struct SYM ** build_tree(struct SYM **symbol_table, int N) {
     temp->gen = 0;
 
     /* Set temp to the last element of symbol table */
-    symbol_table[MAX_T_LEN] = temp;
+    symbol_table[MAX_T_LEN-1] = temp;
 
     /* Sort in descending order */
     qsort(symbol_table, MAX_T_LEN, sizeof(struct SYM *), compare);
